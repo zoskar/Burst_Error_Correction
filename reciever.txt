@@ -1,0 +1,125 @@
+module receiver
+#(
+	parameter N = 224, //Wielkosc strumienia wejsciowego
+	parameter W = N/7 //Ilosc slow po podziale
+)
+(
+	input rst,
+	input clk,
+	input ena,
+	input start,
+	input [N-1:0] signal,
+	output reg [(W*4)-1:0] decoded_signal,
+	output reg rdy
+);
+
+	localparam [2:0] idle = 3'h0,
+						  init = 3'h1,
+						  decoding = 3'h2,
+						  shift = 3'h3,
+						  check = 3'h4;
+	
+	reg [2:0] state_reg, state_next;
+	reg rdy_next;
+	
+	reg [(W*4)-1:0] decoded_signal_next;
+	reg [N-1:0] data_reg, data_next;
+	reg [6:0] counter_reg, counter_next;
+	
+	
+	//Stage register
+	always@(posedge clk or posedge rst) begin
+		if (rst)
+		begin
+			state_reg <= idle;
+			rdy <= 0;
+		end
+		else if (ena)
+		begin
+			state_reg <= state_next;
+			rdy <= rdy_next;
+		end
+	end
+	
+	
+	//Register
+	always@(posedge clk or posedge rst) begin
+		if(rst) begin
+			data_reg <= 0;
+			counter_reg <= 0;
+			decoded_signal <= 0;
+		end
+		
+		else if (ena)
+		begin
+			counter_reg <= counter_next;
+			data_reg <= data_next;
+			decoded_signal <= decoded_signal_next;
+		end
+	end
+	
+	
+	//Decoder module
+	wire [6:0] coded_word;
+	wire [3:0] decoded_word;
+	assign coded_word = {data_reg[N-W], data_reg[N-(2*W)], data_reg[N-(3*W)], 
+								data_reg[N-(4*W)], data_reg[N-(5*W)], data_reg[N-(6*W)], data_reg[N-(7*W)]};
+	decoder decoder_inst(
+	.data_in (coded_word),
+	.data_out (decoded_word)
+	);
+	
+	
+	// Next state logic
+	always@(*)
+		case(state_reg)
+			idle : begin 
+				if (start) state_next = init;
+				else state_next = idle;
+			end
+			
+			init : state_next = decoding;
+			
+			decoding : state_next = shift;
+			
+			shift : state_next = check;
+			
+			check : if (counter_next == W) 
+							state_next = idle;
+					  else
+							state_next = decoding;
+							
+			default: state_next = idle;
+		endcase
+	
+	
+	//Microoperation logic
+	always@(*) begin
+		data_next = data_reg;
+		counter_next = counter_reg;
+		decoded_signal_next = decoded_signal;
+		rdy_next = 1'b0;
+		
+		case(state_reg)
+			init : begin
+				data_next = signal;
+				counter_next = 0;
+			end
+			
+			decoding : begin
+				decoded_signal_next[(W*4)-1:(W*4)-4] = decoded_word;
+				counter_next = counter_reg + 1;
+			end
+
+			shift : begin
+				data_next = data_reg >> 1;
+			end
+			
+			check : if (counter_next == W) rdy_next = 1;
+					  else  decoded_signal_next = decoded_signal >> 4;
+
+			
+			default : ;
+		endcase
+	end
+endmodule

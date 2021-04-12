@@ -1,0 +1,127 @@
+module transmitter
+#(
+	parameter N = 128, //Wielkosc paczki wejsciowej
+	parameter W = N/4 //Ilosc slow po podziale
+)
+(
+	input rst,
+	input clk,
+	input ena,
+	input start,
+	input [N-1:0] signal,
+	output reg [(W*7)-1:0] coded_signal,
+	output reg rdy
+);
+	localparam [2:0] idle = 3'h0,
+						  init = 3'h1,
+						  encoding = 3'h2,
+						  shift = 3'h3,
+						  check = 3'h4;
+				  
+	reg [2:0] state_reg, state_next;
+	reg rdy_next;
+	
+	reg [(W*7)-1:0] coded_signal_next;
+	reg [N-1:0] data_reg, data_next;
+	reg [6:0] counter_reg, counter_next;
+	
+	
+	//State register
+	always@(posedge clk or posedge rst) begin
+		if (rst) 
+		begin
+			state_reg <= idle;
+			rdy <= 1'b0;
+		end
+		else if (ena)
+		begin 
+			state_reg <= state_next;
+			rdy <= rdy_next;
+		end
+	end
+	
+	
+	//Registers
+	always@(posedge clk or posedge rst) begin
+		if (rst) 
+		begin
+			data_reg <= 0;
+			counter_reg <= 0;
+			coded_signal <= 0;
+		end
+		else if (ena)
+		begin
+			data_reg <= data_next;
+			counter_reg <= counter_next;
+			coded_signal <= coded_signal_next;
+		end
+	end
+	
+	
+	//Encoder module
+	wire[3:0] uncoded_word;
+	wire[6:0] coded_word;
+	assign uncoded_word = data_reg[N-1:N-4];
+	encoder encoder_inst(
+	.data_in (uncoded_word),
+	.data_out (coded_word)
+	);
+		
+		
+	// Next state logic
+	always@(*)
+		case(state_reg)
+			idle : begin 
+				if (start) state_next = init;
+				else state_next = idle;
+			end
+			
+			init : state_next = encoding;
+			
+			encoding : state_next = shift;
+			
+			shift : state_next = check;
+			
+			check : if (counter_reg == W) 
+							state_next = idle;
+					  else
+							state_next = encoding;
+							
+			default: state_next = init;
+		endcase
+	
+	
+	//Microoperation logic
+	always@(*) begin
+		data_next = data_reg;
+		counter_next = counter_reg;
+		coded_signal_next = coded_signal;
+		rdy_next = 1'b0;
+		
+		case(state_reg)
+			init : begin
+				data_next = signal;
+				counter_next = 0;
+			end
+			
+			encoding : begin
+				coded_signal_next[(W*7) - 1 - counter_reg] = coded_word[6];
+				coded_signal_next[(W*6) - 1 - counter_reg] = coded_word[5];
+				coded_signal_next[(W*5) - 1 - counter_reg] = coded_word[4];
+				coded_signal_next[(W*4) - 1 - counter_reg] = coded_word[3];
+				coded_signal_next[(W*3) - 1 - counter_reg] = coded_word[2];
+				coded_signal_next[(W*2) - 1 - counter_reg] = coded_word[1];
+				coded_signal_next[(W*1) - 1 - counter_reg] = coded_word[0];
+			end
+
+			shift : begin
+				counter_next = counter_reg + 1;
+				data_next = data_reg << 4;
+			end
+			
+			check : if (counter_reg == W) rdy_next = 1;
+			
+			default : ;
+		endcase
+	end
+endmodule
